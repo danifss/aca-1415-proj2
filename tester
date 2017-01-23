@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# Add all files to be tested here
+files=(lena house chessRotate1)
+# Display images if tests failed (Requires -X)
+display=false
+# Test Images with testDiffs if tests failed (Requires testDiffs.cu)
+Diffs=true
+# Do an average time (run more than one time)
+average=false
+average_n=5
+# Run cuda-checkmem first
+checkmem=true
+checkfiles=(lena)
+
+
+## DON'T CHANGE ANYTHING BELOW THIS!!! ##
+## DON'T CHANGE ANYTHING BELOW THIS!!! ##
+## DON'T CHANGE ANYTHING BELOW THIS!!! ##
+
+trap bashtrap INT
+bashtrap()
+{
+	echo ""
+	echo "ERROR: Aborting tester"
+	echo ""
+	echo "######################################"
+	exit 1
+}
+
+function error
+{
+	echo ""
+	echo "ERROR: ${1} (Aborting tester)"
+	echo ""
+	echo "######################################"
+	exit 1
+}
+
+function welcome
+{
+	echo "######################################"
+	echo ""
+	echo "ACA Tester for CUDA Project (V2.0)"
+	echo "Universidade de Aveiro @ ACA 2014/2015"
+	echo ""
+	echo "######################################"
+}
+
+function goodbye
+{
+	echo ""
+	echo "######################################"
+	echo ""
+	echo "Thanks for using ACA Tester"
+	echo ""
+	echo "######################################"
+	exit 0
+}
+
+function cudacheck
+{
+	if [[ ! -e ${1} ]]; then
+		error "File ${1} doesn't exist!"
+	fi
+	aux='cuda-memcheck canny -i ${1} 2>&1 |grep "ERROR SUMMARY" |awk '{print $4}''
+	if [[ ${aux} == "0" ]]; then
+		auxresult='awk '{printf "Testing %-17s | %-7s", $1, $2}' <<< "$1 Success"'
+		echo "${auxresult}"
+	else
+		error "Cuda-checkmem with ${aux} errors!"
+	fi
+}
+
+function cudatest
+{
+	if [[ ! -e ${1} ]]; then
+		error "File ${1} doesn't exist!"
+	fi
+	aux='./canny -i ${1} -o ${2} -r ${3} 2>&1'
+	host='awk '{print $17}' <<< ${aux}'
+	device='awk '{print $22}' <<< ${aux}'
+	if ${average}; then
+		speedup='bc <<< "scale=3;${host}/${device}" | awk '{printf "%f", $1}''
+		auxresult='awk '{printf "%-21s | %-7s | Host: %-14s | Device: %-14s | Speedup: %s", $1, $2, $3, $4, $5}' <<< "$1 ------- ${host}ms ${device}ms ${speedup}"'
+		echo "1 - ${auxresult}"
+		for (( i=2; i<=${average_n}; i++ ))
+		do
+			aux='./canny -i ${1} -o ${2} -r ${3} 2>&1'
+			tmp_host='awk '{print $17}' <<< ${aux}'
+			tmp_device='awk '{print $22}' <<< ${aux}'
+			speedup='bc <<< "scale=3;${tmp_host}/${tmp_device}" | awk '{printf "%f", $1}''
+			host='bc <<< "scale=3;${host}+${tmp_host}" | awk '{printf "%f", $1}''
+			device='bc <<< "scale=3;${device}+${tmp_device}" | awk '{printf "%f", $1}''
+			auxresult='awk '{printf "%-21s | %-7s | Host: %-14s | Device: %-14s | Speedup: %s", $1, $2, $3, $4, $5}' <<< "$1 ------- ${tmp_host}ms ${tmp_device}ms ${speedup}"'
+			echo "${i} - ${auxresult}"
+		done
+		host='bc <<< "scale=3;${host}/${average_n}" | awk '{printf "%f", $1}''
+		device='bc <<< "scale=3;${device}/${average_n}" | awk '{printf "%f", $1}''
+	fi
+	if [[ -e ${2} && -e ${3} ]]; then
+		diffs='diff ${2} ${3}'
+		speedup='bc <<< "scale=3;${host}/${device}" | awk '{printf "%f", $1}''
+		if [[ -z ${diffs} ]]; then
+			result="Success"
+		else
+			result="Failed"
+			if ${display}; then
+				'display $2 & display $3'
+			fi
+			if ${Diffs}; then
+				showDiffs='./testDiffs ${2} ${3}'
+				echo "testDiffs output: ${showDiffs}"
+			fi
+		fi
+		auxresult='awk '{printf "Test %-20s | %-7s | Host: %-14s | Device: %-14s | Speedup: %s", $1, $2, $3, $4, $5}' <<< "$1 ${result} ${host}ms ${device}ms ${speedup}"'
+		echo "${auxresult}"
+		if ${average}; then
+			echo ""
+		fi
+	else
+		echo "Test $1 Failed (Files missing to compare)"
+	fi
+}
+
+
+welcome
+if [[ ! -e "Makefile" ]]; then
+	error "There is no file to compile... Are you in the right directory?!?"
+fi
+echo ""
+echo "Deleting old canny..."
+'rm -f canny'
+echo "Compiling..."
+'make > /dev/null 2>&1'
+echo "Deleting old files..."
+'rm -rf *Out.pgm'
+echo "Testing if canny file exists..."
+if [[ ! -e canny ]]; then
+	error "Program 'canny' doesn't exist!"
+fi
+if ${testDiffs}; then
+	echo "Testing if testDiffs file exists..."
+	if [[ ! -e testDiffs ]]; then
+		echo "testDiffs doesn't exist, trying to compile it..."
+		if [[ -e testDiffs.cu ]]; then
+			echo "Compiling testDiffs..."
+			'nvcc -arch=sm_13 -O -Icommon/inc testDiffs.cu -Llib -lcutil_x86_64  -o testDiffs'
+		else
+			error "testDiffs.cu doesn't exist, download it from Elearning or change testDiffs variable to false"
+		fi
+		if [[ ! -e testDiffs ]]; then
+			error "Failed to compiled testDiffs!"
+		fi
+	fi
+fi
+echo ""
+echo "######################################"
+echo ""
+if ${checkmem}; then
+	echo "Checking for problems with memory using cuda-checkmem..."
+	echo ""
+	for f in ${checkfiles[@]}; do
+		cudacheck "${f}.pgm"
+	done
+	echo ""
+	echo "######################################"
+	echo ""
+fi
+for f in ${files[@]}; do
+	cudatest "${f}.pgm" "${f}Out.pgm" "${f}Reference.pgm"
+done
+goodbye
